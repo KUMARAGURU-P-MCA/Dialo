@@ -1,0 +1,24 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+*.egg-info/
+
+# Environment
+.env
+!.env.example
+
+# Flutter
+frontend/.dart_tool/
+frontend/.packages
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/build/
+frontend/.metadata
+frontend/pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
