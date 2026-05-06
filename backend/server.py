@@ -433,6 +433,10 @@ async def start_session(req: SessionStartRequest):
 async def end_session(req: SessionEndRequest):
     session_data = active_sessions.get(req.session_id)
     if not session_data:
+        # If server restarted, session_data is lost. Mark as failed in DB if pending.
+        res = supabase.table("sessions").select("status").eq("session_id", req.session_id).execute()
+        if res.data and len(res.data) > 0 and res.data[0]["status"] == "pending":
+            supabase.table("sessions").update({"status": "failed"}).eq("session_id", req.session_id).execute()
         raise HTTPException(status_code=404, detail="Session not found or already ended")
 
     transcript = "\n".join(session_data.get("transcript_buffer", []))
@@ -505,6 +509,7 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
     pending_audio_chunks: dict   = {"count": 0}
     client_disconnected          = asyncio.Event()
     gemini_needs_reconnect       = asyncio.Event()
+    watcher_tasks                = set()
 
     async def flutter_to_gemini():
         try:
@@ -653,6 +658,9 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                     reconnect_task   = asyncio.create_task(gemini_needs_reconnect.wait())
                     disconnect_task  = asyncio.create_task(client_disconnected.wait())
 
+                    watcher_tasks.add(reconnect_task)
+                    watcher_tasks.add(disconnect_task)
+
                     done, pending = await asyncio.wait(
                         [reconnect_task, disconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
@@ -663,6 +671,9 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                             await t
                         except asyncio.CancelledError:
                             pass
+                    
+                    watcher_tasks.discard(reconnect_task)
+                    watcher_tasks.discard(disconnect_task)
 
                     session_holder["session"] = None
                     if client_disconnected.is_set():
@@ -697,6 +708,13 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
     except Exception as e:
         log.error(f"❌ Unexpected error: {e}")
     finally:
+        for t in list(watcher_tasks):
+            if not t.done():
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
         log.info(f"🔌 WebSocket cleanup complete for session {session_id}")
 
 if __name__ == "__main__":

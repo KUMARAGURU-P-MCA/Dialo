@@ -7,11 +7,13 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'package:http/http.dart' as http;
+
 import 'api_service.dart';
 import 'audio_handler.dart';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-const String wsBaseUrl = 'ws://10.168.48.49:8000';
+const String wsBaseUrl = 'ws://10.62.26.49:8000';
 
 // ── App Entry ─────────────────────────────────────────────────────────────────
 void main() async {
@@ -49,20 +51,69 @@ class RootRouter extends StatefulWidget {
 class _RootRouterState extends State<RootRouter> {
   bool _checking = true;
   String? _userId;
+  bool _hasNetworkError = false;
+  String _networkErrorMessage = '';
 
   @override
   void initState() {
     super.initState();
-    _checkExistingUser();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    setState(() {
+      _checking = true;
+      _hasNetworkError = false;
+    });
+
+    final networkOk = await _checkNetwork();
+    if (!networkOk) {
+      if (mounted) {
+        setState(() {
+          _checking = false;
+          _hasNetworkError = true;
+        });
+      }
+      return;
+    }
+
+    await _checkExistingUser();
+  }
+
+  Future<bool> _checkNetwork() async {
+    try {
+      final stopwatch = Stopwatch()..start();
+      // Ping a reliable and fast endpoint to check internet availability and latency
+      final response = await http.get(Uri.parse('https://www.google.com/generate_204')).timeout(const Duration(seconds: 4));
+      stopwatch.stop();
+      
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        if (stopwatch.elapsedMilliseconds > 2500) {
+          _networkErrorMessage = 'Your internet connection is too slow to handle the AI voice responses smoothly.\n\nPlease switch to a faster network.';
+          return false;
+        }
+        return true;
+      }
+      _networkErrorMessage = 'Failed to connect to the internet. Please check your connection.';
+      return false;
+    } on TimeoutException {
+      _networkErrorMessage = 'Connection timed out. Your internet is too slow to handle the AI voice responses.\n\nPlease switch to a faster network.';
+      return false;
+    } catch (e) {
+      _networkErrorMessage = 'No internet connection available.\n\nPlease connect to the internet and try again.';
+      return false;
+    }
   }
 
   Future<void> _checkExistingUser() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getString('user_id');
-    setState(() {
-      _userId = savedId;
-      _checking = false;
-    });
+    if (mounted) {
+      setState(() {
+        _userId = savedId;
+        _checking = false;
+      });
+    }
   }
 
   @override
@@ -70,6 +121,51 @@ class _RootRouterState extends State<RootRouter> {
     if (_checking) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_hasNetworkError) {
+      return Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.wifi_off_rounded,
+                  size: 80,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Connection Issue',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  _networkErrorMessage,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withAlpha(180),
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 40),
+                FilledButton.icon(
+                  onPressed: _initializeApp,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try Again'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
     if (_userId == null) {
@@ -514,9 +610,10 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     _audioHandler.stopPlayback();
 
     final endedSessionId = _sessionId; 
+    bool endedSuccessfully = false;
 
     if (_sessionId != null) {
-      await ApiService.endSession(
+      endedSuccessfully = await ApiService.endSession(
         userId: widget.userId,
         sessionId: _sessionId!,
       );
@@ -529,7 +626,7 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
 
     if (!mounted) return;
 
-    if (navigatingToResults && endedSessionId != null) {
+    if (navigatingToResults && endedSessionId != null && endedSuccessfully) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -540,6 +637,15 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
         ),
       );
     } else {
+      if (navigatingToResults && endedSessionId != null && !endedSuccessfully) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Session lost due to server restart. Grading unavailable.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
       setState(() {
         _isConnected = false;
         _statusText = 'Tap Connect to start';
@@ -588,6 +694,68 @@ class _VoiceAgentScreenState extends State<VoiceAgentScreen>
     }
 
     _setStatus('Processing...', VoiceState.processing);
+    _checkNetworkDuringProcessing();
+  }
+
+  Future<void> _checkNetworkDuringProcessing() async {
+    // Only proceed if we are still processing (the AI hasn't spoken yet)
+    try {
+      final stopwatch = Stopwatch()..start();
+      final response = await http.get(Uri.parse('https://www.google.com/generate_204')).timeout(const Duration(seconds: 4));
+      stopwatch.stop();
+
+      if (!mounted || _voiceState != VoiceState.processing) return;
+
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        if (stopwatch.elapsedMilliseconds > 2500) {
+          _showNetworkDialog('Your internet connection is too slow to handle the AI voice responses smoothly.\n\nPlease switch to a faster network.');
+          _setStatus('Hold to speak', VoiceState.idle);
+        }
+      } else {
+        _showNetworkDialog('Failed to connect to the internet. Please check your connection.');
+        _setStatus('Hold to speak', VoiceState.idle);
+      }
+    } on TimeoutException {
+      if (!mounted || _voiceState != VoiceState.processing) return;
+      _showNetworkDialog('Connection timed out. Your internet is too slow to handle the AI voice responses.\n\nPlease switch to a faster network.');
+      _setStatus('Hold to speak', VoiceState.idle);
+    } catch (e) {
+      if (!mounted || _voiceState != VoiceState.processing) return;
+      _showNetworkDialog('No internet connection available.\n\nPlease connect to the internet and try again.');
+      _setStatus('Hold to speak', VoiceState.idle);
+    }
+  }
+
+  void _showNetworkDialog(String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.wifi_off_rounded, color: Theme.of(context).colorScheme.error),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Connection Issue',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _handleIncomingAudio(Uint8List audioData) async {

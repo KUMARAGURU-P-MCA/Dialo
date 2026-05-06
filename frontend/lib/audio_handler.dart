@@ -11,27 +11,38 @@ class AudioHandler {
 
   bool _isPlayerInitialized = false;
   bool _isPlaying = false;
+  Future<void>? _initFuture;
+  DateTime? _playbackStartTime;
 
   final List<Uint8List> _jitterBuffer = [];
   bool _buffering = true;
   Timer? _playbackTimer;
   Timer? _drainTimer;
 
-  static const int _jitterDelayMs = 60;
+  static const int _jitterDelayMs = 120;
   static const double _msPerChunk = 42.67;
   static const int _drainSafetyMarginMs = 80;
 
   Function()? onPlaybackComplete;
 
-  Future<void> initPlayer() async {
-    if (_isPlayerInitialized) return;
-    await FlutterPcmSound.setup(
-      sampleRate: 24000, 
-      channelCount: 1,   
-    );
-    FlutterPcmSound.setFeedThreshold(8192);
-    FlutterPcmSound.setFeedCallback(_onFeedRequest);
-    _isPlayerInitialized = true;
+  Future<void> initPlayer() {
+    if (_isPlayerInitialized) return Future.value();
+    _initFuture ??= _doInitPlayer();
+    return _initFuture!;
+  }
+
+  Future<void> _doInitPlayer() async {
+    try {
+      await FlutterPcmSound.setup(
+        sampleRate: 24000, 
+        channelCount: 1,   
+      );
+      FlutterPcmSound.setFeedThreshold(8192);
+      FlutterPcmSound.setFeedCallback(_onFeedRequest);
+      _isPlayerInitialized = true;
+    } finally {
+      _initFuture = null;
+    }
   }
 
   void _onFeedRequest(int remainingSamples) {}
@@ -97,6 +108,7 @@ class AudioHandler {
     if (!_isPlaying) {
       await FlutterPcmSound.play();
       _isPlaying = true;
+      _playbackStartTime = DateTime.now();
     }
 
     final buffered = List<Uint8List>.from(_jitterBuffer);
@@ -116,19 +128,29 @@ class AudioHandler {
       return;
     }
 
-    final int estimatedMs =
-        (totalChunks * _msPerChunk).ceil() + _drainSafetyMarginMs;
+    final int totalEstimatedMs = (totalChunks * _msPerChunk).ceil() + _drainSafetyMarginMs;
+    int remainingMs = totalEstimatedMs;
+
+    if (_playbackStartTime != null) {
+      final elapsedMs = DateTime.now().difference(_playbackStartTime!).inMilliseconds;
+      remainingMs = totalEstimatedMs - elapsedMs;
+      if (remainingMs < 0) remainingMs = 0;
+    }
 
     debugPrint(
-      '[AudioHandler] Drain callback in ${estimatedMs}ms '
-      '($totalChunks chunks × ${_msPerChunk}ms + ${_drainSafetyMarginMs}ms margin)',
+      '[AudioHandler] Drain callback in ${remainingMs}ms '
+      '(Total: ${totalEstimatedMs}ms, Elapsed: ${totalEstimatedMs - remainingMs}ms)',
     );
 
-    _drainTimer = Timer(Duration(milliseconds: estimatedMs), () {
-      // FIX: Ensure UI unlocks even if audio wasn't perfectly playing
-      debugPrint('[AudioHandler] Drain complete — onPlaybackComplete');
+    if (remainingMs == 0) {
+      debugPrint('[AudioHandler] Audio already finished — onPlaybackComplete immediately');
       onPlaybackComplete?.call();
-    });
+    } else {
+      _drainTimer = Timer(Duration(milliseconds: remainingMs), () {
+        debugPrint('[AudioHandler] Drain complete — onPlaybackComplete');
+        onPlaybackComplete?.call();
+      });
+    }
   }
 
   Future<void> stopPlayback() async {
@@ -137,6 +159,7 @@ class AudioHandler {
     _buffering = true;
     _playbackTimer?.cancel();
     _playbackTimer = null;
+    _playbackStartTime = null;
     _jitterBuffer.clear();
 
     if (_isPlaying) {

@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 // Change this to your server's actual IP/hostname
-const String baseUrl = 'http://10.168.48.49:8000';
+const String baseUrl = 'http://10.62.26.49:8000';
 
 // ── Data Models ───────────────────────────────────────────────────────────────
 
