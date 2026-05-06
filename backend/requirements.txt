@@ -1,5 +1,6 @@
-fastapi
-uvicorn[standard]
-websockets
-python-dotenv
-google-genai
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.0
+google-genai>=1.0.0
+supabase>=2.4.0
+pydantic>=2.0.0

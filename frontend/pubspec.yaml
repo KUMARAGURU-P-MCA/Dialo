@@ -1,7 +1,8 @@
-name: frontend
-description: "A new Flutter project."
+name: ptt_voice_agent
+description: PTT AI Voice Agent with Supabase backend
+
 publish_to: 'none'
-version: 0.1.0
+version: 1.0.0+1
 
 environment:
   sdk: ^3.10.1
@@ -9,14 +10,29 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  sound_stream: ^0.4.2
-  permission_handler: ^12.0.1
-  record: ^6.2.0
+
+  # WebSocket (Restored to your working v3)
   web_socket_channel: ^3.0.3
+
+  # Audio recording (Restored to your working v6)
+  record: ^6.2.0
+
+  # Audio playback (Kept new PCM sound)
+  flutter_pcm_sound: ^2.0.0
+
+  # HTTP for REST calls to FastAPI
+  http: ^1.2.0
+
+  # Permissions (Restored to your working v12)
+  permission_handler: ^12.0.1
+
+  # Local storage for user_id persistence
+  shared_preferences: ^2.2.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Restored to your working v6
   flutter_lints: ^6.0.0
 
 flutter:
